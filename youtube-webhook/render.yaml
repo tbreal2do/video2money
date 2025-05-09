@@ -7,8 +7,8 @@ services:
     plan: free
     envVars:
       - key: DIFY_API_KEY
-        value: your_dify_api_key
+        value: app-qNlUdORdzpuxro4jssytJeZZ
       - key: DIFY_URL
         value: https://api.dify.ai/v1/workflows/run
       - key: WEBHOOK_SECRET
-        value: your_webhook_secret
+        value: app-qNlUdORdzpuxro4jssytJeZZ

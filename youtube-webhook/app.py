@@ -28,26 +28,31 @@ def youtube_webhook():
     if not verify_signature(request.data, signature, WEBHOOK_SECRET):
         return "Signature mismatch", 403
 
-    # 定义命名空间
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "yt": "http://www.youtube.com/xml/schemas/2015",
-        "media": "http://search.yahoo.com/mrss/"
-    }
+    print("verify_signature success")
+    xml = request.data.decode("utf-8")
+    print(xml)
 
-    root = ET.fromstring(request.data.decode("utf-8"))
+    root = ET.fromstring(xml)
 
-    for entry in root.findall("atom:entry", ns):
-        video_id = entry.find("yt:videoId", ns).text
-        channel_id = entry.find("yt:channelId", ns).text
-        title = entry.find("media:group/media:title", ns).text
-        description = entry.find("media:group/media:description", ns).text
-        thumbnail = entry.find("media:group/media:thumbnail", ns).attrib.get("url")
-        publish_time = entry.find("atom:published", ns).text
-        author = entry.find("atom:author/atom:name", ns).text
-        link = f"https://www.youtube.com/watch?v={video_id}"
+    for entry in root.findall("entry"):
+        video_id = entry.findtext("videoId")
+        channel_id = entry.findtext("channelId")
+        title = entry.findtext("title")
+        publish_time = entry.findtext("published")
+        author_elem = entry.find("author")
+        author = author_elem.findtext("name") if author_elem is not None else ""
+        link_elem = entry.find("link")
+        link = link_elem.attrib.get("href") if link_elem is not None else f"https://www.youtube.com/watch?v={video_id}"
 
-        # 构造发送给 Dify 的 payload
+        media_group = entry.find("group")
+        description = thumbnail = ""
+        if media_group is not None:
+            title = media_group.findtext("title") or title
+            description = media_group.findtext("description") or ""
+            thumbnail_elem = media_group.find("thumbnail")
+            if thumbnail_elem is not None:
+                thumbnail = thumbnail_elem.attrib.get("url", "")
+
         payload = {
             "inputs": {
                 "video_id": video_id,

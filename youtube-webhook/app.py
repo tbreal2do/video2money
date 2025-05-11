@@ -27,28 +27,23 @@ def youtube_webhook():
     signature = request.headers.get("X-Hub-Signature", "")
     if not verify_signature(request.data, signature, WEBHOOK_SECRET):
         return "Signature mismatch", 403
+    print("verify_signature success")
 
     xml = request.data.decode("utf-8")
-    print("Raw XML:", xml)
+    print(xml)
 
-    try:
-        root = ET.fromstring(xml)
-    except ET.ParseError as e:
-        print("XML Parse Error:", e)
-        return "Invalid XML", 400
+    # 清理命名空间前缀
+    xml = xml.replace("yt:", "yt_").replace("media:", "media_")
 
-    # 命名空间定义（注意 Atom 是默认命名空间）
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "yt": "http://www.youtube.com/xml/schemas/2015"
-    }
+    root = ET.fromstring(xml)
 
-    for entry in root.findall("atom:entry", ns):
-        video_id = entry.find("yt:videoId", ns).text
-        channel_id = entry.find("yt:channelId", ns).text
-        title = entry.find("atom:title", ns).text
-        publish_time = entry.find("atom:published", ns).text
-        author = entry.find("atom:author/atom:name", ns).text
+    for entry in root.findall(".//entry"):
+        video_id = entry.find("yt_videoId").text if entry.find("yt_videoId") is not None else ""
+        channel_id = entry.find("yt_channelId").text if entry.find("yt_channelId") is not None else ""
+        title = entry.find("title").text if entry.find("title") is not None else ""
+        published = entry.find("published").text if entry.find("published") is not None else ""
+        author_elem = entry.find("author")
+        author_name = author_elem.find("name").text if author_elem is not None and author_elem.find("name") is not None else ""
         link = f"https://www.youtube.com/watch?v={video_id}"
 
         payload = {
@@ -56,8 +51,8 @@ def youtube_webhook():
                 "video_id": video_id,
                 "channel_id": channel_id,
                 "title": title,
-                "published_at": publish_time,
-                "author": author,
+                "published_at": published,
+                "author": author_name,
                 "video_url": link
             },
             "response_mode": "blocking",
@@ -65,7 +60,7 @@ def youtube_webhook():
         }
 
         headers = {
-            "X-API-Key": f"{DIFY_API_KEY}",
+            "Authorization": f"Bearer {DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
 

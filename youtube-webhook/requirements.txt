@@ -2,3 +2,7 @@ flask
 requests
 gunicorn
 lxml
+yt-dlp==2024.11.18
+loguru~=0.7.2
+pydantic~=2.6.3
+fastapi~=0.115.4

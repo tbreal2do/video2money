@@ -4,6 +4,11 @@ import hashlib
 import xml.etree.ElementTree as ET
 import requests
 import os
+from pydantic import BaseModel
+from loguru import logger
+from fastapi import  BackgroundTasks
+from typing import Optional, List
+from youtube_service import YoutubeService
 
 app = Flask(__name__)
 
@@ -18,6 +23,19 @@ def verify_signature(request_data, x_hub_signature, secret):
         hashlib.sha1
     ).hexdigest()
     return hmac.compare_digest(expected, x_hub_signature)
+
+class DownloadVideoResponse(BaseModel):
+    task_id: str
+    output_path: str
+    resolution: str
+    format: str
+    filename: str
+
+class DownloadVideoRequest(BaseModel):
+    url: str
+    resolution: str
+    output_format: Optional[str] = "mp4"
+    rename: Optional[str] = None
 
 @app.route("/youtube-webhook", methods=["GET", "POST"])
 def youtube_webhook():
@@ -68,3 +86,36 @@ def youtube_webhook():
         print("Dify response:", response.status_code, response.text)
 
     return "", 204
+
+
+@app.route(
+    "/youtube/download",
+    methods=["GET", "POST"],
+    response_model=DownloadVideoResponse,
+    summary="同步请求；下载YouTube视频 (V2)")
+async def download_youtube_video(
+        request: DownloadVideoRequest
+):
+    """
+    下载指定分辨率的YouTube视频
+    """
+    try:
+        youtube_service = YoutubeService()
+        task_id, output_path, filename = await youtube_service.download_video(
+            url=request.url,
+            resolution=request.resolution,
+            output_format=request.output_format,
+            rename=request.rename
+        )
+
+        return {
+            "task_id": task_id,
+            "output_path": output_path,
+            "resolution": request.resolution,
+            "format": request.output_format,
+            "filename": filename
+        }
+
+    except Exception as e:
+        logger.exception(f"Download YouTube video failed: {str(e)}")
+        raise

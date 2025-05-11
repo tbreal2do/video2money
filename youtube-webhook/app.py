@@ -33,6 +33,15 @@ def youtube_webhook():
     xml = request.data.decode("utf-8")
     print(xml)
 
+ # 补全命名空间声明
+    if '<feed' in xml and 'xmlns=' not in xml:
+        xml = xml.replace(
+            "<feed",
+            '<feed xmlns="http://www.w3.org/2005/Atom" '
+            'xmlns:yt="http://www.youtube.com/xml/schemas/2015" '
+            'xmlns:media="http://search.yahoo.com/mrss/"'
+        )
+        
     try:
         root = etree.fromstring(xml.encode('utf-8'))
     except Exception as e:

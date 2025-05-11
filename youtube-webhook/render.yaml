@@ -9,6 +9,6 @@ services:
       - key: DIFY_API_KEY
         value: app-qNlUdORdzpuxro4jssytJeZZ
       - key: DIFY_URL
-        value: https://api.dify.ai/v1/workflows/run
+        value: https://1qyow4mun8fb8n95.ai-plugin.io/single-workflow
       - key: WEBHOOK_SECRET
         value: app-qNlUdORdzpuxro4jssytJeZZ

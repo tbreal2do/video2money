@@ -24,25 +24,40 @@ def youtube_webhook():
     if request.method == "GET":
         return request.args.get("hub.challenge", ""), 200
 
-    # 验证签名
     signature = request.headers.get("X-Hub-Signature", "")
     if not verify_signature(request.data, signature, WEBHOOK_SECRET):
         return "Signature mismatch", 403
 
-    # 解析 XML
-    root = ET.fromstring(request.data.decode("utf-8"))
-    for entry in root.findall("{http://www.w3.org/2005/Atom}entry"):
-        video_id = entry.find("{http://www.youtube.com/xml/schemas/2015}videoId").text
-        title = entry.find("{http://www.w3.org/2005/Atom}title").text
-        publish_time = entry.find("{http://www.w3.org/2005/Atom}published").text
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
+    # 定义命名空间
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+        "media": "http://search.yahoo.com/mrss/"
+    }
 
-        # 调用 Dify API
+    root = ET.fromstring(request.data.decode("utf-8"))
+
+    for entry in root.findall("atom:entry", ns):
+        video_id = entry.find("yt:videoId", ns).text
+        channel_id = entry.find("yt:channelId", ns).text
+        title = entry.find("media:group/media:title", ns).text
+        description = entry.find("media:group/media:description", ns).text
+        thumbnail = entry.find("media:group/media:thumbnail", ns).attrib.get("url")
+        publish_time = entry.find("atom:published", ns).text
+        author = entry.find("atom:author/atom:name", ns).text
+        link = f"https://www.youtube.com/watch?v={video_id}"
+
+        # 构造发送给 Dify 的 payload
         payload = {
             "inputs": {
-                "video_url": video_url,
+                "video_id": video_id,
+                "channel_id": channel_id,
                 "title": title,
-                "published_at": publish_time
+                "description": description,
+                "thumbnail": thumbnail,
+                "published_at": publish_time,
+                "author": author,
+                "video_url": link
             },
             "response_mode": "blocking",
             "user": "youtube-auto"
@@ -54,6 +69,6 @@ def youtube_webhook():
         }
 
         response = requests.post(DIFY_URL, json=payload, headers=headers)
-        print("Dify response:", response.json())
+        print("Dify response:", response.status_code, response.text)
 
     return "", 204

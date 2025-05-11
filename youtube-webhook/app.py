@@ -1,16 +1,15 @@
 from flask import Flask, request
 import hmac
 import hashlib
+import xml.etree.ElementTree as ET
 import requests
 import os
-from lxml import etree
 
 app = Flask(__name__)
 
 DIFY_API_KEY = os.getenv("DIFY_API_KEY")
 DIFY_URL = os.getenv("DIFY_URL")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-
 
 def verify_signature(request_data, x_hub_signature, secret):
     expected = 'sha1=' + hmac.new(
@@ -19,7 +18,6 @@ def verify_signature(request_data, x_hub_signature, secret):
         hashlib.sha1
     ).hexdigest()
     return hmac.compare_digest(expected, x_hub_signature)
-
 
 @app.route("/youtube-webhook", methods=["GET", "POST"])
 def youtube_webhook():
@@ -31,31 +29,26 @@ def youtube_webhook():
         return "Signature mismatch", 403
 
     xml = request.data.decode("utf-8")
-    print(xml)
+    print("Raw XML:", xml)
 
- # 补全命名空间声明
-    if '<feed' in xml and 'xmlns=' not in xml:
-        xml = xml.replace(
-            "<feed",
-            '<feed xmlns="http://www.w3.org/2005/Atom" '
-            'xmlns:yt="http://www.youtube.com/xml/schemas/2015" '
-            'xmlns:media="http://search.yahoo.com/mrss/"'
-        )
-        
     try:
-        root = etree.fromstring(xml.encode('utf-8'))
-    except Exception as e:
+        root = ET.fromstring(xml)
+    except ET.ParseError as e:
         print("XML Parse Error:", e)
         return "Invalid XML", 400
 
-    for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry"):
-        video_id = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
-        channel_id = entry.find(".//{http://www.youtube.com/xml/schemas/2015}channelId").text
-        title = entry.find(".//{http://search.yahoo.com/mrss/}title").text
-        description = entry.find(".//{http://search.yahoo.com/mrss/}description").text
-        thumbnail = entry.find(".//{http://search.yahoo.com/mrss/}thumbnail").attrib.get("url")
-        publish_time = entry.find(".//{http://www.w3.org/2005/Atom}published").text
-        author = entry.find(".//{http://www.w3.org/2005/Atom}name").text
+    # 命名空间定义（注意 Atom 是默认命名空间）
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015"
+    }
+
+    for entry in root.findall("atom:entry", ns):
+        video_id = entry.find("yt:videoId", ns).text
+        channel_id = entry.find("yt:channelId", ns).text
+        title = entry.find("atom:title", ns).text
+        publish_time = entry.find("atom:published", ns).text
+        author = entry.find("atom:author/atom:name", ns).text
         link = f"https://www.youtube.com/watch?v={video_id}"
 
         payload = {
@@ -63,18 +56,16 @@ def youtube_webhook():
                 "video_id": video_id,
                 "channel_id": channel_id,
                 "title": title,
-                "description": description,
-                "thumbnail": thumbnail,
                 "published_at": publish_time,
                 "author": author,
                 "video_url": link
             },
             "response_mode": "blocking",
-            "user": "soulxhy"
+            "user": "youtube-auto"
         }
 
         headers = {
-            "Authorization": f"Bearer {DIFY_API_KEY}",
+            "X-API-Key": f"{DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
 

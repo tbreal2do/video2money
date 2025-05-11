@@ -27,8 +27,13 @@ def youtube_webhook():
     signature = request.headers.get("X-Hub-Signature", "")
     if not verify_signature(request.data, signature, WEBHOOK_SECRET):
         return "Signature mismatch", 403
-
     print("verify_signature success")
+    
+    # 注册命名空间，防止解析失败
+    ET.register_namespace('yt', "http://www.youtube.com/xml/schemas/2015")
+    ET.register_namespace('media', "http://search.yahoo.com/mrss/")
+    ET.register_namespace('atom', "http://www.w3.org/2005/Atom")
+    
     xml = request.data.decode("utf-8")
     print(xml)
 

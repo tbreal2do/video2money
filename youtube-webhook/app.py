@@ -59,13 +59,14 @@ class BwfVideoInfo(BaseModel):
     published_at: str
     author: str
     video_url: str
+    description: str
 
 @app.post("/youtube-webhook")
 async def youtube_webhook_post(request: Request):
-    logger.info("request"+str(await request.body()))
+    # logger.info(str(await request.body()))
     signature = request.headers.get("X-Hub-Signature", "")
     raw_body = await request.body()
-
+    logger.info(f"Received request: {raw_body}")
     if not verify_signature(raw_body, signature, WEBHOOK_SECRET):
         return PlainTextResponse("Signature mismatch", status_code=403)
 
@@ -83,21 +84,21 @@ async def youtube_webhook_post(request: Request):
     except ET.ParseError as e:
         logger.error(f"XML Parse Error: {str(e)}")
         return PlainTextResponse("Invalid XML", status_code=400)
-
+    entry =  root.find('.//atom:entry', namespaces)
     # 提取基本字段
-    video_id = root.find('yt:videoId', namespaces).text
-    channel_id = root.find('yt:channelId', namespaces).text
-    title = root.find('title').text
-    link = root.find('link').attrib.get('href')
-    author = root.find('author/name').text
-    published = root.find('published').text
+    video_id = entry.find('.//yt:videoId', namespaces).text
+    channel_id = entry.find('.//yt:channelId', namespaces).text
+    title = entry.find('.//atom:title', namespaces).text
+    link = entry.find('.//atom:link', namespaces).attrib.get('href')
+    author = entry.find('.//atom:author/atom:name', namespaces).text
+    published = entry.find('.//atom:published', namespaces).text
 
     # 提取 media 相关字段
-    media_title = root.find('media:group/media:title', namespaces).text
-    media_description = root.find('media:group/media:description', namespaces).text
-    media_thumbnail = root.find('media:group/media:thumbnail', namespaces).attrib.get('url')
-    views = root.find('media:group/media:community/media:statistics', namespaces).attrib.get('views')
-    rating = root.find('media:group/media:community/media:starRating', namespaces).attrib.get('average')
+    media_title = entry.find('.//media:group/media:title', namespaces).text
+    media_description = entry.find('.//media:group/media:description', namespaces).text
+    media_thumbnail = entry.find('.//media:group/media:thumbnail', namespaces).attrib.get('url')
+    views = entry.find('.//media:group/media:community/media:statistics', namespaces).attrib.get('views')
+    rating = entry.find('.//media:group/media:community/media:starRating', namespaces).attrib.get('average')
 
     bwf_info= BwfVideoInfo(
                 video_id = video_id,
@@ -180,21 +181,22 @@ email_template = """
 """
 
 async def send_email2me(req: Email2MeRequest):
-    subject = """🎬 新视频发布通知 |《{title}》"""
+    subject = """🎬 新视频发布通知 |《{title}》""".format(title=req.bwf_video_info.title)
     email_content = email_template.format(
         title=req.bwf_video_info.title,
-        publish_time=req.bwf_video_info.publish_time,
+        publish_time=req.bwf_video_info.published_at,
         author=req.bwf_video_info.author,
         description=req.bwf_video_info.description,
         download_link=req.video_download_info.output_path,
         sender_name="soul"
     )
+
     eq = EmailRequest(
         to=MY_EMAIL,
         subject=subject,
         body=email_content
     )
-    send_email(eq)
+    await send_email(eq)
 
 
 @app.post("/send-email")

@@ -1,6 +1,5 @@
 import sys
-
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, EmailStr
 from aiosmtplib import send
@@ -50,7 +49,7 @@ class DownloadVideoResponse(BaseModel):
     filename: str
 
 @app.get("/youtube-webhook")
-async def youtube_webhook_get(hub_challenge: Optional[str] = ""):
+async def youtube_webhook_get(hub_challenge: Optional[str] = Query(None, alias="hub.challenge")):
     return PlainTextResponse(content=hub_challenge or "", status_code=200)
 
 class BwfVideoInfo(BaseModel):

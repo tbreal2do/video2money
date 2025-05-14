@@ -1,28 +1,46 @@
-from flask import Flask, request
+import sys
+
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, EmailStr
+from aiosmtplib import send
+from email.message import EmailMessage
 import hmac
 import hashlib
 import xml.etree.ElementTree as ET
 import requests
 import os
-from pydantic import BaseModel
 from loguru import logger
-from fastapi import  BackgroundTasks
-from typing import Optional, List
+from typing import Optional
 from youtube_service import YoutubeService
+from dotenv import load_dotenv
 
-app = Flask(__name__)
+# 添加控制台输出
+logger.add(sys.stdout, level="INFO", format="{time} {level} {message}")
+
+load_dotenv()
+
+app = FastAPI()
 
 DIFY_API_KEY = os.getenv("DIFY_API_KEY")
 DIFY_URL = os.getenv("DIFY_URL")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
-def verify_signature(request_data, x_hub_signature, secret):
+
+def verify_signature(request_data: bytes, x_hub_signature: str, secret: str) -> bool:
     expected = 'sha1=' + hmac.new(
         secret.encode('utf-8'),
         request_data,
         hashlib.sha1
     ).hexdigest()
     return hmac.compare_digest(expected, x_hub_signature)
+
+
+class DownloadVideoRequest(BaseModel):
+    url: str
+    resolution: str
+    output_format: Optional[str] = "mp4"
+    rename: Optional[str] = None
 
 class DownloadVideoResponse(BaseModel):
     task_id: str
@@ -31,74 +49,76 @@ class DownloadVideoResponse(BaseModel):
     format: str
     filename: str
 
-class DownloadVideoRequest(BaseModel):
-    url: str
-    resolution: str
-    output_format: Optional[str] = "mp4"
-    rename: Optional[str] = None
+@app.get("/youtube-webhook")
+async def youtube_webhook_get(hub_challenge: Optional[str] = ""):
+    return PlainTextResponse(content=hub_challenge or "", status_code=200)
 
-@app.route("/youtube-webhook", methods=["GET", "POST"])
-def youtube_webhook():
-    if request.method == "GET":
-        return request.args.get("hub.challenge", ""), 200
+class BwfVideoInfo(BaseModel):
+    video_id: str
+    channel_id: str
+    title: str
+    published_at: str
+    author: str
+    video_url: str
 
+@app.post("/youtube-webhook")
+async def youtube_webhook_post(request: Request):
+    logger.info("request",request)
     signature = request.headers.get("X-Hub-Signature", "")
-    if not verify_signature(request.data, signature, WEBHOOK_SECRET):
-        return "Signature mismatch", 403
-    print("verify_signature success")
+    raw_body = await request.body()
 
-    xml = request.data.decode("utf-8")
-    print(xml)
+    if not verify_signature(raw_body, signature, WEBHOOK_SECRET):
+        return PlainTextResponse("Signature mismatch", status_code=403)
 
-    # 清理命名空间前缀
-    xml = xml.replace("yt:", "yt_").replace("media:", "media_")
+    xml = raw_body.decode("utf-8")
 
-    root = ET.fromstring(xml)
+    # 定义命名空间
+    namespaces = {
+        'atom': 'http://www.w3.org/2005/Atom',
+        'yt': 'http://www.youtube.com/xml/schemas/2015',
+        'media': 'http://search.yahoo.com/mrss/'
+    }
 
-    for entry in root.findall(".//entry"):
-        video_id = entry.find("yt_videoId").text if entry.find("yt_videoId") is not None else ""
-        channel_id = entry.find("yt_channelId").text if entry.find("yt_channelId") is not None else ""
-        title = entry.find("title").text if entry.find("title") is not None else ""
-        published = entry.find("published").text if entry.find("published") is not None else ""
-        author_elem = entry.find("author")
-        author_name = author_elem.find("name").text if author_elem is not None and author_elem.find("name") is not None else ""
-        link = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as e:
+        logger.error(f"XML Parse Error: {str(e)}")
+        return PlainTextResponse("Invalid XML", status_code=400)
 
-        payload = {
-            "inputs": {
-                "video_id": video_id,
-                "channel_id": channel_id,
-                "title": title,
-                "published_at": published,
-                "author": author_name,
-                "video_url": link
-            },
-            "response_mode": "blocking",
-            "user": "youtube-auto"
-        }
+    # 提取基本字段
+    video_id = root.find('yt:videoId', namespaces).text
+    channel_id = root.find('yt:channelId', namespaces).text
+    title = root.find('title').text
+    link = root.find('link').attrib.get('href')
+    author = root.find('author/name').text
+    published = root.find('published').text
 
-        headers = {
-            "Authorization": f"Bearer {DIFY_API_KEY}",
-            "Content-Type": "application/json"
-        }
+    # 提取 media 相关字段
+    media_title = root.find('media:group/media:title', namespaces).text
+    media_description = root.find('media:group/media:description', namespaces).text
+    media_thumbnail = root.find('media:group/media:thumbnail', namespaces).attrib.get('url')
+    views = root.find('media:group/media:community/media:statistics', namespaces).attrib.get('views')
+    rating = root.find('media:group/media:community/media:starRating', namespaces).attrib.get('average')
 
-        response = requests.post(DIFY_URL, json=payload, headers=headers)
-        print("Dify response:", response.status_code, response.text)
+    bwf_info= BwfVideoInfo(
+                video_id = video_id,
+                channel_id = channel_id,
+                title = title,
+                published_at= published,
+                author = author,
+                video_url= link,
+                description = media_description
+        )
+    download_info =  await download_youtube_video(DownloadVideoRequest(url=link,  resolution="1080p"))
+    await send_email2me(Email2MeRequest(video_download_info=download_info, bwf_video_info=bwf_info))
 
-    return "", 204
+    return PlainTextResponse(status_code=204)
 
 
-@app.route(
-    "/youtube/download",
-    methods=["GET", "POST"],
-    response_model=DownloadVideoResponse,
-    summary="同步请求；下载YouTube视频 (V2)")
-async def download_youtube_video(
-        request: DownloadVideoRequest
-):
-    """
-    下载指定分辨率的YouTube视频
-    """
+@app.post("/youtube/download",
+          response_model=DownloadVideoResponse,
+          summary="同步请求；下载YouTube视频 (V2)")
+async def download_youtube_video(request: DownloadVideoRequest):
     try:
         youtube_service = YoutubeService()
         task_id, output_path, filename = await youtube_service.download_video(
@@ -107,15 +127,101 @@ async def download_youtube_video(
             output_format=request.output_format,
             rename=request.rename
         )
-
-        return {
-            "task_id": task_id,
-            "output_path": output_path,
-            "resolution": request.resolution,
-            "format": request.output_format,
-            "filename": filename
-        }
+        logger.exception(f"Download YouTube video successfully")
+        return DownloadVideoResponse(
+            task_id = task_id,
+            output_path = output_path,
+            resolution = request.resolution,
+            format = request.output_format,
+            filename = filename)
 
     except Exception as e:
         logger.exception(f"Download YouTube video failed: {str(e)}")
-        raise
+        return PlainTextResponse("Failed to download video", status_code=500)
+
+
+# 从环境变量加载 SMTP 配置
+SMTP_HOST = os.getenv("SMTP_HOST")      # 例如 smtp.gmail.com
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")      # 发件人邮箱
+SMTP_PASS = os.getenv("SMTP_PASS")      # 授权码或密码
+MY_EMAIL = os.getenv("MY_EMAIL")      # 收件人邮箱
+
+class EmailRequest(BaseModel):
+    to: EmailStr
+    subject: str
+    body: str
+
+
+class Email2MeRequest(BaseModel):
+    video_download_info: DownloadVideoResponse
+    bwf_video_info: BwfVideoInfo
+
+
+email_template = """
+您好，
+
+我们刚刚收到了一个新视频，欢迎查看并下载观看！以下是本次视频的详细信息：
+
+📌 标题：{title}
+🕒 发布时间：{publish_time}
+✍️ 作者：{author}
+📝 视频描述：
+{description}
+
+📥 下载链接：
+{download_link}
+
+如果您有任何反馈或建议，欢迎随时回复本邮件与我们联系。
+
+感谢您的关注与支持！
+
+祝好，  
+{sender_name}
+"""
+
+async def send_email2me(req: Email2MeRequest):
+    subject = """🎬 新视频发布通知 |《{title}》"""
+    email_content = email_template.format(
+        title=req.bwf_video_info.title,
+        publish_time=req.bwf_video_info.publish_time,
+        author=req.bwf_video_info.author,
+        description=req.bwf_video_info.description,
+        download_link=req.video_download_info.output_path,
+        sender_name="soul"
+    )
+    eq = EmailRequest(
+        to=MY_EMAIL,
+        subject=subject,
+        body=email_content
+    )
+    send_email(eq)
+
+
+@app.post("/send-email")
+async def send_email(req: EmailRequest):
+    message = EmailMessage()
+    message["From"] = SMTP_USER
+    message["To"] = req.to
+    message["Subject"] = req.subject
+    message.set_content(req.body)
+
+    try:
+        await send(
+            message,
+            hostname=SMTP_HOST,
+            port=SMTP_PORT,
+            username=SMTP_USER,
+            password=SMTP_PASS,
+            start_tls=True
+        )
+        logger.info(message["Subject"],f"Email sent successfully to {req.to}")
+        return {"message": "Email sent successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Email sending failed: {str(e)}")
+
+
+# 可选：添加自动启动支持（仅用于调试）
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

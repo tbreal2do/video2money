@@ -62,7 +62,7 @@ class BwfVideoInfo(BaseModel):
 
 @app.post("/youtube-webhook")
 async def youtube_webhook_post(request: Request):
-    logger.info("request",request)
+    logger.info("request"+str(await request.body()))
     signature = request.headers.get("X-Hub-Signature", "")
     raw_body = await request.body()
 
